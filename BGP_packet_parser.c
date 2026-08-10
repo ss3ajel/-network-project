@@ -1,4 +1,4 @@
-#define _DEFAULT_SOURCE//still in process
+#define _DEFAULT_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,10 +14,10 @@
 #include <arpa/inet.h>
 #include <poll.h>
 #include <netinet/tcp.h>
-struct bgp_header {
-    uint8_t marker[16];
-    uint16_t length;
-    uint8_t type;
+struct bgp_header {       //this code is still unfinished and i am planning to try it with virtual machines (virtual routers ) 
+    uint8_t marker[16];//16bytes
+    uint16_t length;//2bytes
+    uint8_t type;//1bytes
 } __attribute__((packed));
 struct pseudo_header {
     uint32_t src_addr;
@@ -26,6 +26,29 @@ struct pseudo_header {
     uint8_t  protocol;
     uint16_t tcp_length;
 };
+struct bgp_open {
+    uint8_t  version;
+    uint16_t my_as;
+    uint16_t hold_time;
+    uint32_t bgp_identifier;
+    uint8_t  opt_param_len;
+} __attribute__((packed));
+struct bgp_notification {
+    uint8_t  error;
+    uint16_t sub_error;
+    uint16_t data_field;
+   
+    uint8_t  opt_param_len;
+} __attribute__((packed));
+struct bgp_update {
+    uint8_t wrl;
+    uint16_t wr;
+    uint16_t tpa_l;
+    uint16_t pa;
+    uint16_t nlri;
+   
+    uint8_t  opt_param_len;
+} __attribute__((packed));
 unsigned short checksum(unsigned short *buffer,int len){
     uint32_t sum=0;
     while (len > 1) {
@@ -89,7 +112,7 @@ int main(){
 
 
     struct iphdr *ipn=(struct iphdr *)(buffer+sizeof(struct ethhdr));
-    ipn->ihl = 5;
+    ipn->ihl = 4;
     ipn->version = 4;
     ipn->tos = 0;
     ipn->tot_len =htons(sizeof(struct iphdr)+sizeof(struct tcphdr));
@@ -133,33 +156,35 @@ int main(){
     for(uint32_t i=net_h+1;i<brd_h;i++){
 
         ipn->daddr = htonl(i);
-         ipn->check = 0;
-         ipn->check = checksum((unsigned short *)ipn,sizeof(struct iphdr));
-         tcp->check=0;
-         char pbuffer[3333];
-         struct pseudo_header *pseudo=(struct pseudo_header*)(pbuffer);
+        ipn->check = 0;
+        ipn->check = checksum((unsigned short *)ipn,sizeof(struct iphdr));
+        tcp->check=0;
+        char pbuffer[3333];
+        struct pseudo_header *pseudo=(struct pseudo_header*)(pbuffer);
         pseudo->src_addr = ipn->saddr;
-       pseudo->dst_addr = ipn->daddr;
-         pseudo->protocol = IPPROTO_TCP;
+        pseudo->dst_addr = ipn->daddr;
+        pseudo->protocol = IPPROTO_TCP;
         pseudo->tcp_length = htons(sizeof(struct tcphdr) + sizeof(struct bgp_header));
         
          
         uint8_t *payload = (uint8_t *)tcp + tcp->doff * 4;
-         tcp=(struct tcphdr*)(pbuffer+sizeof(struct pseudo_header));
+        char csum_buf[sizeof(struct pseudo_header) + sizeof(struct tcphdr)];
+        memcpy(csum_buf, &pseudo, sizeof(pseudo));
+        memcpy(csum_buf + sizeof(pseudo), tcp, sizeof(struct tcphdr));
+        tcp->check = 0;  
+        tcp->check = checksum((unsigned short*)csum_buf, sizeof(csum_buf));
 
-
-         tcp->check=checksum((unsigned short*)tcp ,sizeof(pseudo));
 
         sendto(d,buffer,sizeof(struct ethhdr) + sizeof(struct iphdr)+ sizeof(struct tcphdr), 0, (struct sockaddr *)&device, sizeof(device));
         struct sockaddr_ll receiver;
-         receiver.sll_family=AF_PACKET;
-         receiver.sll_ifindex = ifindex;
-         receiver.sll_halen = ETH_ALEN;
-         socklen_t len=sizeof( receiver);
+        receiver.sll_family=AF_PACKET;
+        receiver.sll_ifindex = ifindex;
+        receiver.sll_halen = ETH_ALEN;
+        socklen_t len=sizeof( receiver);
          
 
-         int rec_len=recvfrom(d,rbuffer,sizeof(rbuffer),0,(struct sockaddr*)&receiver,&len);
-         if(rec_len<sizeof(struct ethhdr)) {continue;}//14 bytes}
+        int rec_len=recvfrom(d,rbuffer,sizeof(rbuffer),0,(struct sockaddr*)&receiver,&len);
+        if(rec_len<sizeof(struct ethhdr)) {continue;}//14 bytes}
         struct ethhdr *reth=(struct ethhdr*)rbuffer;
         
        
@@ -175,13 +200,50 @@ int main(){
 }
         struct tcphdr *rtcp=(struct tcphdr*)(rbuffer+sizeof(struct ethhdr )+ip_hd_len);
 
-         uint8_t *payload = (uint8_t *)rtcp + rtcp->doff * 4;
-         if(rtcp->ack&&rtcp->syn){
-            //open
-         }else (rtcp->rst){
+        uint8_t *payload = (uint8_t *)rtcp + rtcp->doff * 4;
+        struct bgp_header *bgp = (struct bgp_header *)payload;
+        if(rtcp->ack&&rtcp->syn){
+            memset(bgp->marker,0XFF,16);
+            bgp->type=1;
+            struct bgp_open open_msg;
+            open_msg.version = 4;
+            open_msg.my_as = htons();
+            open_msg.hold_time = htons(180);        
+            open_msg.bgp_identifier = 1; //
+            open_msg.opt_param_len = 0;  
+            bgp->length=htons(19+sizeof(open_msg));
+            pseudo->dst_addr = ipn->daddr;
+            pseudo->tcp_length = htons(sizeof(struct tcphdr));  
+
+            size_t bgp_total_len = sizeof(bgp) + sizeof(open_msg); 
+            memcpy(csum_buf, &pseudo, sizeof(pseudo));
+            memcpy(csum_buf + sizeof(pseudo), tcp, sizeof(struct tcphdr));
+            tcp->check = 0;
+            tcp->check = checksum((unsigned short*)csum_buf, sizeof(csum_buf));
+            ipn->tot_len = htons(sizeof(struct iphdr) + sizeof(struct tcphdr) + bgp_total_len);
+            ipn->check = 0;
+            ipn->check = checksum((unsigned short*)ipn, sizeof(struct iphdr));
+            uint8_t *bgp_payload = buffer + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct tcphdr);
+            memcpy(bgp_payload, &bgp, sizeof(struct bgp_header));
+            memcpy(bgp_payload + sizeof(struct bgp_header), &open_msg, sizeof(open_msg));
+
+           tcp->seq = htonl(1); 
+           uint8_t rseq=rtcp->seq;      
+           tcp->ack_seq = htonl(rseq + 1);
+           size_t total_len = sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct tcphdr) + bgp_total_len;
+           sendto(d, buffer, total_len, 0, (struct sockaddr*)&device, sizeof(device));
+           
+
+            //open;
+         }else if(rtcp->rst){
+            struct bgp_notification bbp;
+            bbp.error=1;
+            tcp->fin=1;
+
             //close
          }
-         struct bgp_header *bgp = (struct bgp_header *)payload;
+
+       
          // if (port == 179 && has_payload) parse_bgp(payload);
 }
 
