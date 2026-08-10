@@ -14,11 +14,17 @@
 #include <arpa/inet.h>
 #include <poll.h>
 #include <netinet/tcp.h>
-struct bgp_header {       //this code is still unfinished and i am planning to try it with virtual machines (virtual routers ) 
+struct bgp_header {   //still inexecutable need vm or aavaible routers to test ts
+
     uint8_t marker[16];//16bytes
     uint16_t length;//2bytes
     uint8_t type;//1bytes
 } __attribute__((packed));
+struct bgp_route_refresh_payload {
+    uint16_t afi;        
+    uint8_t  reserved;   
+    uint8_t  safi;       
+};
 struct pseudo_header {
     uint32_t src_addr;
     uint32_t dst_addr;
@@ -207,7 +213,7 @@ int main(){
             bgp->type=1;
             struct bgp_open open_msg;
             open_msg.version = 4;
-            open_msg.my_as = htons();
+            open_msg.my_as = htons(1);
             open_msg.hold_time = htons(180);        
             open_msg.bgp_identifier = 1; //
             open_msg.opt_param_len = 0;  
@@ -232,19 +238,64 @@ int main(){
            tcp->ack_seq = htonl(rseq + 1);
            size_t total_len = sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct tcphdr) + bgp_total_len;
            sendto(d, buffer, total_len, 0, (struct sockaddr*)&device, sizeof(device));
-           
+           struct bgp_open ropen_msg;
+           receiver.sll_family=AF_PACKET;
+           receiver.sll_ifindex = ifindex;
+           receiver.sll_halen = ETH_ALEN;
+           socklen_t len=sizeof( receiver);
 
-            //open;
-         }else if(rtcp->rst){
-            struct bgp_notification bbp;
-            bbp.error=1;
-            tcp->fin=1;
+           int recv_len=recvfrom(d,rbuffer,sizeof(rbuffer),0,(struct sockaddr*)&receiver,&len);
+
+           size_t tcp_hdr_len = rtcp->doff * 4;
+           if (rip->protocol != IPPROTO_TCP) { continue; } // 8bytes
+           size_t ip_hdr_len=rip->ihl*5;
+           size_t eth_hdr_len=ETH_HLEN;
+           size_t payload_len = recv_len - eth_hdr_len - ip_hdr_len - tcp_hdr_len;
+           uint8_t *rbgp_payload = (uint8_t *)rtcp + tcp_hdr_len;
+
+           if (payload_len < sizeof(struct bgp_header)) {
+                continue;  
+            }
+        
+           struct bgp_header *bgpp = (struct bgp_header *)rbgp_payload;
+           if (bgp->type == 1) {
+           
+           struct bgp_open *peer_open = (struct bgp_open *)(rbgp_payload + sizeof(struct bgp_header));
+        
+           //fill in the fields
+
+          
+         
+          
+         
+        }else if(bgpp->type==2){///the if condition are messy i ll optimise later'
+            struct bgp_update *peer_update=(struct bgp_update *)(rbgp_payload + sizeof(struct bgp_header));
+           //fill in the fields
+        }else if (bgpp->type==3){
+              struct bgp_notification *peer_notification=(struct bgp_notification *)(rbgp_payload + sizeof(struct bgp_header));
+
+              //fill in the fields
+        }else if(bgpp->type ==4){
+            struct bgp_header*peer_alive=(struct bgp_header*)(rbgp_payload + sizeof(struct bgp_header));
+
+             //fill in the fields
+
+        }else if(bgpp->type==5){
+             struct bgp_route_refresh_payload *peer_refresh=(struct bgp_route_refresh_payload*)(rbgp_payload + sizeof(struct bgp_header));
+            
+            //fill in the fields
+
+        }
+         else if(rtcp->rst){
+            printf("connection was not established");
 
             //close
          }
 
        
-         // if (port == 179 && has_payload) parse_bgp(payload);
-}
+         
 
+
+}
+}
 }
