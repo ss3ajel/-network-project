@@ -14,16 +14,34 @@
 #include <arpa/inet.h>
 #include <poll.h>
 #include <netinet/tcp.h>
-struct bgp_header {   //still inexecutable need vm or aavaible routers to test ts
-
+//fixed somewhat the bgp messages there is still a boundaries problem for parsing the bytes //need recalculation 
+//i ll print the messages later  idc ill try to modify the notification to parse exactly the error type 
+//need testing on virtual routers first idk how to set the virtual machines yet i ll set it up once the code is somewhat finished to debugg
+ 
+struct withdrawn_routes {
+    uint8_t ip_pre[4];
+    uint32_t ip_pre_len;
+};
+struct nlri_struct {
+    uint8_t ip_pre;
+    uint32_t ip_pre_len;
+};
+struct path_attribute {
+    uint8_t flags;
+    uint8_t type;
+    uint16_t length;
+    uint8_t *value;
+};
+struct bgp_header {
     uint8_t marker[16];//16bytes
     uint16_t length;//2bytes
     uint8_t type;//1bytes
 } __attribute__((packed));
 struct bgp_route_refresh_payload {
     uint16_t afi;        
-    uint8_t  reserved;   
-    uint8_t  safi;       
+   
+    uint8_t  safi; 
+    uint8_t  reserved;        
 };
 struct pseudo_header {
     uint32_t src_addr;
@@ -48,10 +66,10 @@ struct bgp_notification {
 } __attribute__((packed));
 struct bgp_update {
     uint8_t wrl;
-    uint16_t wr;
+    struct withdrawn_routes  *wr;
     uint16_t tpa_l;
-    uint16_t pa;
-    uint16_t nlri;
+    struct path_attribute * pa;
+    struct nlri_struct* nlri;
    
     uint8_t  opt_param_len;
 } __attribute__((packed));
@@ -208,7 +226,13 @@ int main(){
 
         uint8_t *payload = (uint8_t *)rtcp + rtcp->doff * 4;
         struct bgp_header *bgp = (struct bgp_header *)payload;
-        if(rtcp->ack&&rtcp->syn){
+        while(rtcp->ack&&rtcp->syn){
+             if(rtcp->rst){
+            printf("connection was not established");
+             break;
+            //close
+         }
+      //creating an open message from my device 
             memset(bgp->marker,0XFF,16);
             bgp->type=1;
             struct bgp_open open_msg;
@@ -248,7 +272,7 @@ int main(){
 
            size_t tcp_hdr_len = rtcp->doff * 4;
            if (rip->protocol != IPPROTO_TCP) { continue; } // 8bytes
-           size_t ip_hdr_len=rip->ihl*5;
+           size_t ip_hdr_len=rip->ihl*4;
            size_t eth_hdr_len=ETH_HLEN;
            size_t payload_len = recv_len - eth_hdr_len - ip_hdr_len - tcp_hdr_len;
            uint8_t *rbgp_payload = (uint8_t *)rtcp + tcp_hdr_len;
@@ -261,6 +285,7 @@ int main(){
            if (bgp->type == 1) {
            
            struct bgp_open *peer_open = (struct bgp_open *)(rbgp_payload + sizeof(struct bgp_header));
+
         
            //fill in the fields
 
@@ -270,27 +295,75 @@ int main(){
          
         }else if(bgpp->type==2){///the if condition are messy i ll optimise later'
             struct bgp_update *peer_update=(struct bgp_update *)(rbgp_payload + sizeof(struct bgp_header));
+            char *p=bgpp;
+            peer_update->wrl=p;
+            uint8_t stop=p+peer_update->wrl;
+            p+=2;
+            while(p<stop){//still 
+            peer_update->wr->ip_pre_len=p;
+            size_t pref_bytes=(peer_update->wr->ip_pre_len+7)/8;//round up 
+            peer_update->wr+=1;
+            p+=pref_bytes;
+            }
+           uint16_t pa_len = (p[0] << 8) | p[1];   // read the size if the total path len wich is  
+           p += 2;                                   //bytes
+            uint8_t *paths = p + pa_len;   
+            while (p<paths){
+            peer_update->pa->flags=*p;
+            p+=1;
+            peer_update->pa->type=*p;
+            p+=1;
+            uint8_t flags=peer_update->pa->flags;
+            if(flags &0x10){
+                peer_update->pa->length=((uint16_t)p[0] << 8) | p[1];
+                p+=2;//if e=1
+
+            }else{
+                peer_update->pa->length=*p; 
+                p+=1;}//if E=1
+           
+           
+            memcpy(peer_update->pa->value, p, peer_update->pa->length);
+            p += peer_update->pa->length;        
+            }
+            while (p!=NULL){
+            peer_update->nlri->ip_pre_len = *p;
+            size_t jump = (peer_update->nlri->ip_pre_len + 7) / 8;
+            p += 1;
+    
+            memcpy(peer_update->nlri->ip_pre, p, jump);  
+            p += jump;
+    
+            peer_update->nlri += 1; 
+            }
+            
+           
            //fill in the fields
         }else if (bgpp->type==3){
               struct bgp_notification *peer_notification=(struct bgp_notification *)(rbgp_payload + sizeof(struct bgp_header));
+              printf("something erreur not avaible.....");
 
               //fill in the fields
         }else if(bgpp->type ==4){
-            struct bgp_header*peer_alive=(struct bgp_header*)(rbgp_payload + sizeof(struct bgp_header));
+    
+            printf("still open ");
 
              //fill in the fields
 
         }else if(bgpp->type==5){
              struct bgp_route_refresh_payload *peer_refresh=(struct bgp_route_refresh_payload*)(rbgp_payload + sizeof(struct bgp_header));
+             char *p=bgpp;
+             p += 2;
+             peer_refresh->safi = *p;
+             p += 1;
+             peer_refresh->reserved = *p;
+             p += 1;
             
             //fill in the fields
 
         }
-         else if(rtcp->rst){
-            printf("connection was not established");
 
-            //close
-         }
+        
 
        
          
